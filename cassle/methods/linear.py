@@ -60,6 +60,9 @@ class LinearModel(pl.LightningModule):
 
         super().__init__()
 
+        # validation outputs storage for PyTorch Lightning 2.0
+        self.validation_step_outputs = []
+
         self.backbone = backbone
         self.classifier = nn.Linear(self.backbone.inplanes, num_classes)  # type: ignore
 
@@ -285,17 +288,16 @@ class LinearModel(pl.LightningModule):
         if self.split_strategy == "domain" and len(batch) == 3:
             results["domains"] = batch[0]
 
+        self.validation_step_outputs.append(results)
         return results
 
-    def validation_epoch_end(self, outs: List[Dict[str, Any]]):
+    def on_validation_epoch_end(self):
         """Averages the losses and accuracies of all the validation batches.
         This is needed because the last batch can be smaller than the others,
         slightly skewing the metrics.
-
-        Args:
-            outs (List[Dict[str, Any]]): list of outputs of the validation step.
         """
 
+        outs = self.validation_step_outputs
         val_loss = weighted_mean(outs, "val_loss", "batch_size")
         val_acc1 = weighted_mean(outs, "val_acc1", "batch_size")
         val_acc5 = weighted_mean(outs, "val_acc5", "batch_size")
@@ -324,3 +326,4 @@ class LinearModel(pl.LightningModule):
                     log[f"val_acc1_{domain}_{task_idx}"] = correct_domain / mask_domain.sum()
 
         self.log_dict(log, sync_dist=True)
+        self.validation_step_outputs.clear()  # free memory

@@ -162,10 +162,28 @@ def additional_setup_pretrain(args: Namespace):
     if args.optimizer == "sgd":
         args.extra_optimizer_args["momentum"] = 0.9
 
-    if isinstance(args.gpus, int):
-        args.gpus = [args.gpus]
-    elif isinstance(args.gpus, str):
-        args.gpus = [int(gpu) for gpu in args.gpus.split(",") if gpu]
+    # Handle both --gpus and --devices parameters for backward compatibility
+    if hasattr(args, 'devices') and args.devices is not None:
+        # Convert devices to gpus format for backward compatibility
+        if isinstance(args.devices, int):
+            # If devices is an integer, it means the number of devices to use
+            # For single GPU, use device 0; for multiple GPUs, use range(devices)
+            if args.devices == 1:
+                args.gpus = [0]
+            else:
+                args.gpus = list(range(args.devices))
+        elif isinstance(args.devices, str):
+            args.gpus = [int(gpu) for gpu in args.devices.split(",") if gpu]
+        else:
+            args.gpus = args.devices if isinstance(args.devices, list) else [args.devices]
+    elif hasattr(args, 'gpus') and args.gpus is not None:
+        if isinstance(args.gpus, int):
+            args.gpus = [args.gpus]
+        elif isinstance(args.gpus, str):
+            args.gpus = [int(gpu) for gpu in args.gpus.split(",") if gpu]
+    else:
+        # Default to using one GPU
+        args.gpus = [0]
 
     # adjust lr according to batch size
     args.lr = args.lr * args.batch_size * len(args.gpus) / 256
@@ -197,7 +215,25 @@ def additional_setup_linear(args: Namespace):
     if args.optimizer == "sgd":
         args.extra_optimizer_args["momentum"] = 0.9
 
-    if isinstance(args.gpus, int):
-        args.gpus = [args.gpus]
-    elif isinstance(args.gpus, str):
-        args.gpus = [int(gpu) for gpu in args.gpus.split(",") if gpu]
+    # Handle both --gpus and --devices parameters for backward compatibility
+    if hasattr(args, 'devices') and args.devices is not None:
+        # Convert devices to gpus format for backward compatibility
+        if isinstance(args.devices, int):
+            # If devices is an integer, it means the number of devices to use
+            # For single GPU, use device 0; for multiple GPUs, use range(devices)
+            if args.devices == 1:
+                args.gpus = [0]
+            else:
+                args.gpus = list(range(args.devices))
+        elif isinstance(args.devices, str):
+            args.gpus = [int(gpu) for gpu in args.devices.split(",") if gpu]
+        else:
+            args.gpus = args.devices if isinstance(args.devices, list) else [args.devices]
+    elif hasattr(args, 'gpus') and args.gpus is not None:
+        if isinstance(args.gpus, int):
+            args.gpus = [args.gpus]
+        elif isinstance(args.gpus, str):
+            args.gpus = [int(gpu) for gpu in args.gpus.split(",") if gpu]
+    else:
+        # Default to using one GPU
+        args.gpus = [0]

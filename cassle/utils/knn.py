@@ -33,7 +33,7 @@ class WeightedKNNClassifier(Metric):
                 step. Defaults to False.
         """
 
-        super().__init__(dist_sync_on_step=dist_sync_on_step, compute_on_step=False)
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
 
         self.k = k
         self.T = T
@@ -84,6 +84,11 @@ class WeightedKNNClassifier(Metric):
             Sequence[float]: k-NN accuracy @1 and @5.
         """
 
+        # Check if we have any data to compute metrics on
+        if not self.train_features or not self.test_features:
+            # Return dummy values if no data is available
+            return torch.tensor(0.0), torch.tensor(0.0)
+            
         train_features = torch.cat(self.train_features)
         train_targets = torch.cat(self.train_targets)
         test_features = torch.cat(self.test_features)

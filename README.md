@@ -17,10 +17,10 @@ NOTE: most of the code in this repository is borrowed from [solo-learn](https://
 # Installation
 Use the following commands to create an environment and install the required packages (needs `conda`):
 ```
-conda create --name cassle python=3.8
+conda create --name cassle python=3.9
 conda activate cassle
-conda install pytorch=1.10.2 torchvision cudatoolkit=11.3 -c pytorch
-pip install pytorch-lightning==1.5.4 lightning-bolts wandb sklearn einops
+conda install pytorch torchvision pytorch-cuda=11.8 -c pytorch -c nvidia
+pip install pytorch-lightning>=2.0.0 lightning-bolts wandb scikit-learn einops
 pip install --extra-index-url https://developer.download.nvidia.com/compute/redist --upgrade nvidia-dali-cuda110
 ```
 Remember to check your cuda version and modify the install commands accorgingly.

@@ -6,7 +6,7 @@ import torch.nn as nn
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.strategies import DDPStrategy
 from torchvision.models import resnet18, resnet50
 
 from cassle.args.setup import parse_args_linear
@@ -107,10 +107,10 @@ def main():
         args,
         logger=wandb_logger if args.wandb else None,
         callbacks=callbacks,
-        plugins=DDPPlugin(find_unused_parameters=True),
-        checkpoint_callback=False,
-        terminate_on_nan=True,
-        accelerator="ddp",
+        strategy=DDPStrategy(find_unused_parameters=True),
+        enable_checkpointing=False,
+        detect_anomaly=True,
+        accelerator="gpu",
     )
     if args.dali:
         trainer.fit(model, val_dataloaders=val_loader)

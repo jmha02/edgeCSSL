@@ -97,6 +97,9 @@ class BaseModel(pl.LightningModule):
 
         super().__init__()
 
+        # validation outputs storage for PyTorch Lightning 2.0
+        self.validation_step_outputs = []
+
         # back-bone related
         self.cifar = cifar
         self.zero_init_residual = zero_init_residual
@@ -157,19 +160,34 @@ class BaseModel(pl.LightningModule):
             self.min_lr = self.min_lr * self.accumulate_grad_batches
             self.warmup_start_lr = self.warmup_start_lr * self.accumulate_grad_batches
 
-        assert encoder in ["resnet18", "resnet50"]
-        from torchvision.models import resnet18, resnet50
-
-        self.base_model = {"resnet18": resnet18, "resnet50": resnet50}[encoder]
-
-        # initialize encoder
-        self.encoder = self.base_model(zero_init_residual=zero_init_residual)
-        self.features_dim = self.encoder.inplanes
-        # remove fc layer
-        self.encoder.fc = nn.Identity()
-        if cifar:
-            self.encoder.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=2, bias=False)
-            self.encoder.maxpool = nn.Identity()
+        assert encoder in ["resnet18", "resnet50", "vit_small"]
+        
+        if encoder in ["resnet18", "resnet50"]:
+            from torchvision.models import resnet18, resnet50
+            self.base_model = {"resnet18": resnet18, "resnet50": resnet50}[encoder]
+            
+            # initialize encoder
+            self.encoder = self.base_model(zero_init_residual=zero_init_residual)
+            self.features_dim = self.encoder.inplanes
+            # remove fc layer
+            self.encoder.fc = nn.Identity()
+            if cifar:
+                self.encoder.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=2, bias=False)
+                self.encoder.maxpool = nn.Identity()
+        elif encoder == "vit_small":
+            from cassle.backbones import vit_small
+            
+            # For CIFAR datasets, use smaller image size
+            img_size = 32 if cifar else 224
+            patch_size = 4 if cifar else 16
+            
+            # initialize encoder
+            self.encoder = vit_small(
+                img_size=img_size,
+                patch_size=patch_size,
+                num_classes=0  # Remove classification head
+            )
+            self.features_dim = self.encoder.embed_dim  # 384 for ViT-Small
 
         self.classifier = nn.Linear(self.features_dim, num_classes)
 
@@ -191,7 +209,7 @@ class BaseModel(pl.LightningModule):
         parser = parent_parser.add_argument_group("base")
 
         # encoder args
-        SUPPORTED_NETWORKS = ["resnet18", "resnet50"]
+        SUPPORTED_NETWORKS = ["resnet18", "resnet50", "vit_small"]
 
         parser.add_argument("--encoder", choices=SUPPORTED_NETWORKS, type=str)
         parser.add_argument("--zero_init_residual", action="store_true")
@@ -474,18 +492,17 @@ class BaseModel(pl.LightningModule):
             if self.split_strategy == "domain" and len(batch) == 3:
                 metrics["domains"] = batch[0]
 
+            self.validation_step_outputs.append({**metrics, **out})
             return {**metrics, **out}
 
-    def validation_epoch_end(self, outs: List[Dict[str, Any]]):
+    def on_validation_epoch_end(self):
         """Averages the losses and accuracies of all the validation batches.
         This is needed because the last batch can be smaller than the others,
         slightly skewing the metrics.
-
-        Args:
-            outs (List[Dict[str, Any]]): list of outputs of the validation step.
         """
 
         if self.online_eval:
+            outs = self.validation_step_outputs
             val_loss = weighted_mean(outs, "val_loss", "batch_size")
             val_acc1 = weighted_mean(outs, "val_acc1", "batch_size")
             val_acc5 = weighted_mean(outs, "val_acc5", "batch_size")
@@ -518,6 +535,7 @@ class BaseModel(pl.LightningModule):
                     log.update({"val_knn_acc1": val_knn_acc1, "val_knn_acc5": val_knn_acc5})
 
             self.log_dict(log, sync_dist=True)
+            self.validation_step_outputs.clear()  # free memory
 
 
 class BaseMomentumModel(BaseModel):
@@ -546,13 +564,30 @@ class BaseMomentumModel(BaseModel):
         super().__init__(**kwargs)
 
         # momentum encoder
-        self.momentum_encoder = self.base_model(zero_init_residual=self.zero_init_residual)
-        self.momentum_encoder.fc = nn.Identity()
-        if self.cifar:
-            self.momentum_encoder.conv1 = nn.Conv2d(
-                3, 64, kernel_size=3, stride=1, padding=2, bias=False
-            )
-            self.momentum_encoder.maxpool = nn.Identity()
+        if hasattr(self, 'base_model'):  # ResNet models
+            self.momentum_encoder = self.base_model(zero_init_residual=self.zero_init_residual)
+            self.momentum_encoder.fc = nn.Identity()
+            if self.cifar:
+                self.momentum_encoder.conv1 = nn.Conv2d(
+                    3, 64, kernel_size=3, stride=1, padding=2, bias=False
+                )
+                self.momentum_encoder.maxpool = nn.Identity()
+        else:  # ViT models
+            # Create a copy of the encoder for momentum
+            encoder_type = kwargs.get('encoder', 'resnet18')
+            if encoder_type == "vit_small":
+                from cassle.backbones import vit_small
+                
+                # For CIFAR datasets, use smaller image size
+                img_size = 32 if self.cifar else 224
+                patch_size = 4 if self.cifar else 16
+                
+                self.momentum_encoder = vit_small(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    num_classes=0  # Remove classification head
+                )
+        
         initialize_momentum_params(self.encoder, self.momentum_encoder)
 
         # momentum classifier
@@ -782,32 +817,29 @@ class BaseMomentumModel(BaseModel):
                     "momentum_val_acc5": out["acc5"],
                 }
 
+            self.validation_step_outputs.append((parent_metrics, metrics))
             return parent_metrics, metrics
 
-    def validation_epoch_end(self, outs: Tuple[List[Dict[str, Any]]]):
+    def on_validation_epoch_end(self):
         """Averages the losses and accuracies of the momentum encoder / classifier for all the
         validation batches. This is needed because the last batch can be smaller than the others,
         slightly skewing the metrics.
-
-        Args:
-            outs (Tuple[List[Dict[str, Any]]]):): list of outputs of the validation step for self
-                and the parent.
         """
 
         if self.online_eval:
-            parent_outs = [out[0] for out in outs]
-            super().validation_epoch_end(parent_outs)
+            super().on_validation_epoch_end()
 
             if self.momentum_classifier is not None:
-                momentum_outs = [out[1] for out in outs]
+                momentum_outs = [out[1] for out in self.validation_step_outputs if out[1] is not None]
 
-                val_loss = weighted_mean(momentum_outs, "momentum_val_loss", "batch_size")
-                val_acc1 = weighted_mean(momentum_outs, "momentum_val_acc1", "batch_size")
-                val_acc5 = weighted_mean(momentum_outs, "momentum_val_acc5", "batch_size")
+                if momentum_outs:
+                    val_loss = weighted_mean(momentum_outs, "momentum_val_loss", "batch_size")
+                    val_acc1 = weighted_mean(momentum_outs, "momentum_val_acc1", "batch_size")
+                    val_acc5 = weighted_mean(momentum_outs, "momentum_val_acc5", "batch_size")
 
-                log = {
-                    "momentum_val_loss": val_loss,
-                    "momentum_val_acc1": val_acc1,
-                    "momentum_val_acc5": val_acc5,
-                }
-                self.log_dict(log, sync_dist=True)
+                    log = {
+                        "momentum_val_loss": val_loss,
+                        "momentum_val_acc1": val_acc1,
+                        "momentum_val_acc5": val_acc5,
+                    }
+                    self.log_dict(log, sync_dist=True)

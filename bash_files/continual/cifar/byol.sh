@@ -6,7 +6,7 @@ python3 main_continual.py \
     --max_epochs 500 \
     --num_tasks 2 \
     --task_idx 0 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --lars \

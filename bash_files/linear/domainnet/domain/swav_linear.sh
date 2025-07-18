@@ -5,7 +5,7 @@ python3 main_linear.py \
     --data_dir $DATA_DIR/domainnet \
     --split_strategy domain \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -30,7 +30,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain quickdraw \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -55,7 +55,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain clipart \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -80,7 +80,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain infograph \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -105,7 +105,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain painting \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -130,7 +130,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain real \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \
@@ -155,7 +155,7 @@ python3 main_linear.py \
     --split_strategy domain \
     --domain sketch \
     --max_epochs 100 \
-    --gpus 0 \
+    --devices 0 \
     --precision 16 \
     --optimizer sgd \
     --scheduler step \

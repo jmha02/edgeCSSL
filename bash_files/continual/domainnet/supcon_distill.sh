@@ -6,7 +6,7 @@ python3 main_continual.py \
     --max_epochs 200 \
     --num_tasks 6 \
     --task_idx 1 \
-    --gpus 0,1,2,3 \
+    --devices 0,1,2,3 \
     --accelerator ddp \
     --sync_batchnorm \
     --num_workers 5 \

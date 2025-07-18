@@ -42,6 +42,14 @@ def main():
 
     args = parse_args_pretrain()
 
+    # Remove devices parameter to avoid conflict with PyTorch Lightning
+    if hasattr(args, 'devices'):
+        delattr(args, 'devices')
+        
+    # Manually fix gpus parameter to use device 0 instead of device 1
+    if hasattr(args, 'gpus') and args.gpus == [1]:
+        args.gpus = [0]
+
     # online eval dataset reloads when task dataset is over
     args.multiple_trainloader_mode = "min_size"
 
@@ -208,8 +216,9 @@ def main():
         args,
         logger=wandb_logger if args.wandb else None,
         callbacks=callbacks,
-        checkpoint_callback=False,
-        terminate_on_nan=True,
+        enable_checkpointing=False,
+        detect_anomaly=True,
+        gpus=args.gpus,  # Use our processed gpus list
     )
 
     model.current_task_idx = args.task_idx
