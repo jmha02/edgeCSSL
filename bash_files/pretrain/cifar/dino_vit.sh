@@ -1,4 +1,4 @@
-python3 ../../../main_pretrain.py \
+python3 main_pretrain.py \
     --dataset cifar100 \
     --encoder vit_small \
     --data_dir ./data \
@@ -38,4 +38,8 @@ python3 ../../../main_pretrain.py \
     --clip_grad 3.0 \
     --freeze_last_layer 1 \
     --base_tau_momentum 0.996 \
-    --final_tau_momentum 1.0
+    --final_tau_momentum 1.0 \
+    --scheduler cosine \
+    --task_idx 0 \
+    --split_strategy data \
+    --num_tasks 1

@@ -29,7 +29,8 @@ saved_models/
 model_storage/
 model_storage*/
 lightning_logs/
-
+experiments/
+trained_models/
 *.json
 
 *logs*/

@@ -203,19 +203,22 @@ class DINO(BaseMomentumModel):
         extra_momentum_pairs = [(self.head, self.momentum_head)]
         return super().momentum_pairs + extra_momentum_pairs
 
-    def clip_gradients(self, clip: float):
+    def clip_gradients(self, optimizer, gradient_clip_val=None, gradient_clip_algorithm=None):
         """Clips gradients after backward pass.
 
         Args:
-            clip (float): threshold for gradient clipping.
+            optimizer: The optimizer (unused but required by PyTorch Lightning).
+            gradient_clip_val: threshold for gradient clipping.
+            gradient_clip_algorithm: algorithm for gradient clipping (unused).
         """
-
-        for p in self.encoder.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                clip_coef = clip / (param_norm + 1e-6)
-                if clip_coef < 1:
-                    p.grad.data.mul_(clip_coef)
+        clip = gradient_clip_val if gradient_clip_val is not None else self.clip_grad
+        if clip > 0:
+            for p in self.encoder.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    clip_coef = clip / (param_norm + 1e-6)
+                    if clip_coef < 1:
+                        p.grad.data.mul_(clip_coef)
 
     def on_train_epoch_start(self):
         """Updates the current epoch in DINO's loss object."""

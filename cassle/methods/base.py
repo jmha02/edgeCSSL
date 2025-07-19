@@ -827,7 +827,19 @@ class BaseMomentumModel(BaseModel):
         """
 
         if self.online_eval:
+            # Extract parent metrics (first element from tuples, keep dicts as-is)
+            original_outputs = self.validation_step_outputs
+            parent_outputs = []
+            for out in original_outputs:
+                if isinstance(out, tuple):
+                    parent_outputs.append(out[0])  # Extract parent metrics from tuple
+                else:
+                    parent_outputs.append(out)  # Keep dict as-is
+            
+            self.validation_step_outputs = parent_outputs
             super().on_validation_epoch_end()
+            # Restore original outputs for momentum processing
+            self.validation_step_outputs = original_outputs
 
             if self.momentum_classifier is not None:
                 momentum_outs = [out[1] for out in self.validation_step_outputs if out[1] is not None]
