@@ -1,4 +1,4 @@
-# EdgeSSL
+# EdgeCSSL
 The code in this repository is borrowed from [CaSSLe](https://github.com/DonkeyShot21/cassle)
 
 # Installation
