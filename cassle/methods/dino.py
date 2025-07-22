@@ -10,6 +10,12 @@ from cassle.methods.base import BaseMomentumModel
 from cassle.utils.momentum import initialize_momentum_params
 from cassle.utils.trunc_normal import trunc_normal_
 
+try:
+    import torch.profiler
+    _profiler_available = True
+except ImportError:
+    _profiler_available = False
+
 
 class DINOHead(nn.Module):
     mlp: Any
@@ -233,9 +239,15 @@ class DINO(BaseMomentumModel):
         Returns:
             Dict[str, Any]: a dict containing the outputs of the parent and the logits of the head.
         """
-
-        out = super().forward(X, *args, **kwargs)
-        p = self.head(out["feats"])
+        
+        if _profiler_available:
+            with torch.profiler.record_function("dino_encoder_forward"):
+                out = super().forward(X, *args, **kwargs)
+            with torch.profiler.record_function("dino_head_forward"):
+                p = self.head(out["feats"])
+        else:
+            out = super().forward(X, *args, **kwargs)
+            p = self.head(out["feats"])
         return {**out, "p": p}
 
     def training_step(self, batch: Sequence[Any], batch_idx: int) -> torch.Tensor:
@@ -249,24 +261,45 @@ class DINO(BaseMomentumModel):
         Returns:
             torch.Tensor: total loss composed of DINO loss and classification loss.
         """
-
-        out = super().training_step(batch, batch_idx)
+        
+        if _profiler_available:
+            with torch.profiler.record_function("dino_parent_step"):
+                out = super().training_step(batch, batch_idx)
+        else:
+            out = super().training_step(batch, batch_idx)
+            
         class_loss = out["loss"]
         feats1, feats2 = out["feats"]
         momentum_feats1, momentum_feats2 = out["momentum_feats"]
 
         # forward online encoder
-        p1 = self.head(feats1)
-        p2 = self.head(feats2)
-        p = torch.cat((p1, p2))
+        if _profiler_available:
+            with torch.profiler.record_function("dino_online_head"):
+                p1 = self.head(feats1)
+                p2 = self.head(feats2)
+                p = torch.cat((p1, p2))
+        else:
+            p1 = self.head(feats1)
+            p2 = self.head(feats2)
+            p = torch.cat((p1, p2))
 
         # forward momentum encoder
-        p1_momentum = self.momentum_head(momentum_feats1)
-        p2_momentum = self.momentum_head(momentum_feats2)
-        p_momentum = torch.cat((p1_momentum, p2_momentum))
+        if _profiler_available:
+            with torch.profiler.record_function("dino_momentum_head"):
+                p1_momentum = self.momentum_head(momentum_feats1)
+                p2_momentum = self.momentum_head(momentum_feats2)
+                p_momentum = torch.cat((p1_momentum, p2_momentum))
+        else:
+            p1_momentum = self.momentum_head(momentum_feats1)
+            p2_momentum = self.momentum_head(momentum_feats2)
+            p_momentum = torch.cat((p1_momentum, p2_momentum))
 
         # ------- contrastive loss -------
-        dino_loss = self.dino_loss_func(p, p_momentum)
+        if _profiler_available:
+            with torch.profiler.record_function("dino_loss_computation"):
+                dino_loss = self.dino_loss_func(p, p_momentum)
+        else:
+            dino_loss = self.dino_loss_func(p, p_momentum)
 
         self.log("dino_loss", dino_loss, on_epoch=True, sync_dist=True)
 

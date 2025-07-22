@@ -32,7 +32,7 @@ lightning_logs/
 experiments/
 trained_models/
 *.json
-
+torch_profiles/
 *logs*/
 
 # Created by https://www.gitignore.io/api/python,visualstudiocode

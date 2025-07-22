@@ -4,8 +4,32 @@ import subprocess
 import argparse
 from datetime import datetime
 import inspect
+import itertools
 
-from main_continual import str_to_dict
+def str_to_dict(command):
+    """Fixed version of str_to_dict that handles empty commands properly"""
+    d = {}
+    if not command:
+        return d
+    
+    for part, part_next in itertools.zip_longest(command[:-1], command[1:]):
+        if part is None or part == "" or len(part) < 2:
+            continue
+            
+        if part.startswith("--"):
+            if part_next is not None and not part_next.startswith("--"):
+                d[part] = part_next
+            else:
+                d[part] = part
+        elif not part.startswith("--") and part_next is not None and not part_next.startswith("--"):
+            # Only proceed if we have keys in the dictionary
+            if len(d.keys()) > 0:
+                part_prev = list(d.keys())[-1]
+                if not isinstance(d[part_prev], list):
+                    d[part_prev] = [d[part_prev]]
+                if not part_next.startswith("--"):
+                    d[part_prev].append(part_next)
+    return d
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--script", type=str, required=True)
@@ -22,17 +46,42 @@ args = parser.parse_args()
 # load file
 if os.path.exists(args.script):
     with open(args.script) as f:
-        command = [line.strip().strip("\\").strip() for line in f.readlines()]
+        command_lines = [line.strip().strip("\\").strip() for line in f.readlines()]
+        # Filter out empty lines and comments
+        command_lines = [line for line in command_lines if line and not line.startswith("#")]
+        command = command_lines
 else:
     print(f"{args.script} does not exist.")
     exit()
 
+# Join all lines and split into arguments
+full_command = " ".join(command)
+command_parts = full_command.split()
+
+# Find python command and extract arguments
+python_idx = -1
+for i, part in enumerate(command_parts):
+    if "python" in part or "main_continual.py" in part:
+        python_idx = i
+        break
+
+if python_idx == -1:
+    print("Could not find python command in script")
+    exit()
+
+# Extract arguments (everything after main_continual.py)
+script_args = []
+for i, part in enumerate(command_parts[python_idx:]):
+    if "main_continual.py" in part:
+        script_args = command_parts[python_idx + i + 1:]
+        break
+
 assert (
-    "--checkpoint_dir" not in command
+    "--checkpoint_dir" not in script_args
 ), "Please remove the --checkpoint_dir argument, it will be added automatically"
 
 # collect args
-command_args = str_to_dict(" ".join(command).split(" ")[2:])
+command_args = str_to_dict(script_args)
 
 # create experiment directory
 if args.experiment_dir is None:
@@ -43,8 +92,8 @@ os.makedirs(full_experiment_dir, exist_ok=True)
 print(f"Experiment directory: {full_experiment_dir}")
 
 # add experiment directory to the command
-command.extend(["--checkpoint_dir", full_experiment_dir])
-command = " ".join(command)
+command_with_checkpoint = full_command + f" --checkpoint_dir {full_experiment_dir}"
+command = command_with_checkpoint
 
 # run command
 if args.mode == "normal":

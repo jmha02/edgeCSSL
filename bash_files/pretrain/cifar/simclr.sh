@@ -1,14 +1,12 @@
-# export DATA_DIR=${DATA_DIR:-./data}
-# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-python3 main_continual.py \
+python3 main_pretrain.py \
     --dataset cifar100 \
-    --encoder resnet50 \
-    --data_dir $DATA_DIR \
-    --split_strategy class \
-    --task_idx 0 \
-    --num_tasks 2 \
-    --max_epochs 10 \
-    --devices 0 \
+    --encoder resnet18 \
+    --data_dir ./data \
+    --train_dir train \
+    --val_dir val \
+    --max_epochs 500 \
+    --devices 1 \
+    --accelerator gpu \
     --precision 16 \
     --optimizer sgd \
     --lars \
@@ -20,15 +18,23 @@ python3 main_continual.py \
     --classifier_lr 0.1 \
     --weight_decay 1e-5 \
     --batch_size 256 \
-    --num_workers 5 \
+    --num_workers 4 \
     --brightness 0.8 \
     --contrast 0.8 \
     --saturation 0.8 \
     --hue 0.2 \
     --gaussian_prob 0.0 0.0 \
-    --name simclr-cifar100 \
+    --min_scale 0.08 \
+    --size 32 \
+    --num_crops 2 \
+    --name simclr-resnet18-cifar100 \
+    --project cassle \
+    --entity cassle_ssl \
     --save_checkpoint \
     --method simclr \
     --temperature 0.2 \
     --proj_hidden_dim 2048 \
-    --output_dim 256
+    --output_dim 256 \
+    --task_idx 0 \
+    --split_strategy data \
+    --num_tasks 1

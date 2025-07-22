@@ -54,6 +54,12 @@ def parse_args_pretrain() -> argparse.Namespace:
     parser.add_argument("--pretrained_model", type=str, default=None)
     parser.add_argument("--save_checkpoint", action="store_true")
     parser.add_argument("--auto_umap", action="store_true")
+    
+    # add torch.compile() acceleration args
+    parser.add_argument("--compile_model", action="store_true", help="Enable torch.compile() for acceleration")
+    parser.add_argument("--compile_mode", type=str, default="default", 
+                       choices=["default", "reduce-overhead", "max-autotune"],
+                       help="Compilation mode for torch.compile()")
     temp_args, _ = parser.parse_known_args()
 
     # optionally add checkpointer and AutoUMAP args

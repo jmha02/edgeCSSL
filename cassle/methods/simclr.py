@@ -7,6 +7,12 @@ from einops import repeat
 from cassle.losses.simclr import manual_simclr_loss_func, simclr_loss_func
 from cassle.methods.base import BaseModel
 
+try:
+    import torch.profiler
+    _profiler_available = True
+except ImportError:
+    _profiler_available = False
+
 
 class SimCLR(BaseModel):
     def __init__(
@@ -76,9 +82,15 @@ class SimCLR(BaseModel):
                 a dict containing the outputs of the parent
                 and the projected and predicted features.
         """
-
-        out = super().forward(X, *args, **kwargs)
-        z = self.projector(out["feats"])
+        
+        if _profiler_available:
+            with torch.profiler.record_function("simclr_encoder_forward"):
+                out = super().forward(X, *args, **kwargs)
+            with torch.profiler.record_function("simclr_projector_forward"):
+                z = self.projector(out["feats"])
+        else:
+            out = super().forward(X, *args, **kwargs)
+            z = self.projector(out["feats"])
         return {**out, "z": z}
 
     @torch.no_grad()
@@ -114,7 +126,11 @@ class SimCLR(BaseModel):
 
         indexes, *_, target = batch[f"task{self.current_task_idx}"]
 
-        out = super().training_step(batch, batch_idx)
+        if _profiler_available:
+            with torch.profiler.record_function("simclr_parent_step"):
+                out = super().training_step(batch, batch_idx)
+        else:
+            out = super().training_step(batch, batch_idx)
 
         if self.multicrop:
             n_augs = self.num_crops + self.num_small_crops
@@ -140,17 +156,32 @@ class SimCLR(BaseModel):
         else:
             feats1, feats2 = out["feats"]
 
-            z1 = self.projector(feats1)
-            z2 = self.projector(feats2)
+            if _profiler_available:
+                with torch.profiler.record_function("simclr_projection"):
+                    z1 = self.projector(feats1)
+                    z2 = self.projector(feats2)
+            else:
+                z1 = self.projector(feats1)
+                z2 = self.projector(feats2)
 
             # ------- contrastive loss -------
-            if self.supervised:
-                pos_mask = self.gen_extra_positives_gt(target)
-                nce_loss = simclr_loss_func(
-                    z1, z2, extra_pos_mask=pos_mask, temperature=self.temperature
-                )
+            if _profiler_available:
+                with torch.profiler.record_function("simclr_loss_computation"):
+                    if self.supervised:
+                        pos_mask = self.gen_extra_positives_gt(target)
+                        nce_loss = simclr_loss_func(
+                            z1, z2, extra_pos_mask=pos_mask, temperature=self.temperature
+                        )
+                    else:
+                        nce_loss = simclr_loss_func(z1, z2, temperature=self.temperature)
             else:
-                nce_loss = simclr_loss_func(z1, z2, temperature=self.temperature)
+                if self.supervised:
+                    pos_mask = self.gen_extra_positives_gt(target)
+                    nce_loss = simclr_loss_func(
+                        z1, z2, extra_pos_mask=pos_mask, temperature=self.temperature
+                    )
+                else:
+                    nce_loss = simclr_loss_func(z1, z2, temperature=self.temperature)
 
         # compute number of extra positives
         n_positives = (

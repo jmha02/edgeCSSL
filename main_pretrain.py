@@ -6,6 +6,7 @@ import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.profilers import PyTorchProfiler
 
 from cassle.args.setup import parse_args_pretrain
 from cassle.methods import METHODS
@@ -173,6 +174,36 @@ def main():
         state_dict = torch.load(args.pretrained_model, map_location="cpu")["state_dict"]
         model.load_state_dict(state_dict, strict=False)
 
+    # Apply torch.compile() for acceleration if requested and available
+    if hasattr(args, 'compile_model') and args.compile_model and hasattr(torch, 'compile'):
+        print("Compiling model components with torch.compile() for acceleration...")
+        
+        compile_mode = getattr(args, 'compile_mode', 'default')
+        print(f"Using compile mode: {compile_mode}")
+        
+        try:
+            # Compile individual components instead of the entire Lightning module
+            if hasattr(model, 'encoder'):
+                model.encoder = torch.compile(model.encoder, mode=compile_mode)
+            
+            if hasattr(model, 'momentum_encoder'):
+                model.momentum_encoder = torch.compile(model.momentum_encoder, mode=compile_mode)
+                
+            if hasattr(model, 'projector'):
+                model.projector = torch.compile(model.projector, mode=compile_mode)
+                
+            if hasattr(model, 'head'):
+                model.head = torch.compile(model.head, mode=compile_mode)
+                
+            if hasattr(model, 'momentum_head'):
+                model.momentum_head = torch.compile(model.momentum_head, mode=compile_mode)
+            
+        except Exception as e:
+            print(f"torch.compile() failed: {e}")
+            
+    elif hasattr(args, 'compile_model') and args.compile_model:
+        print("torch.compile() requested but not available (PyTorch < 2.0)")
+
     callbacks = []
 
     # wandb logging
@@ -212,10 +243,36 @@ def main():
         )
         callbacks.append(auto_umap)
 
+    # Setup profiler if requested
+    profiler = None
+    if os.getenv("TORCH_PROFILER_ENABLED"):
+        output_dir = os.getenv("TORCH_PROFILER_OUTPUT", "./torch_profiles")
+        wait = int(os.getenv("TORCH_PROFILER_WAIT", 1))
+        warmup = int(os.getenv("TORCH_PROFILER_WARMUP", 1))
+        active = int(os.getenv("TORCH_PROFILER_ACTIVE", 3))
+        repeat = int(os.getenv("TORCH_PROFILER_REPEAT", 2))
+        
+        profiler = PyTorchProfiler(
+            dirpath=output_dir,
+            filename="trace",
+            schedule=torch.profiler.schedule(
+                wait=wait,
+                warmup=warmup,
+                active=active,
+                repeat=repeat
+            ),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        )
+        print(f"PyTorch profiler enabled: {output_dir}")
+
     trainer = Trainer.from_argparse_args(
         args,
         logger=wandb_logger if args.wandb else None,
         callbacks=callbacks,
+        profiler=profiler,
         enable_checkpointing=False,
         detect_anomaly=True,
         gpus=args.gpus,  # Use our processed gpus list
