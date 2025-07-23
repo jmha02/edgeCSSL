@@ -183,19 +183,22 @@ class BaseModel(pl.LightningModule):
                 self.encoder.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=2, bias=False)
                 self.encoder.maxpool = nn.Identity()
         elif encoder == "vit_small":
-            from cassle.backbones import vit_small
+            import timm
             
             # For CIFAR datasets, use smaller image size
             img_size = 32 if cifar else 224
             patch_size = 4 if cifar else 16
             
-            # initialize encoder
-            self.encoder = vit_small(
+            self.encoder = timm.create_model(
+                'vit_small_patch16_224',
+                pretrained=False,
+                num_classes=0,  # Remove classification head
                 img_size=img_size,
                 patch_size=patch_size,
-                num_classes=0  # Remove classification head
+                global_pool=''
             )
-            self.features_dim = self.encoder.embed_dim  # 384 for ViT-Small
+            
+            self.features_dim = self.encoder.embed_dim
 
         self.classifier = nn.Linear(self.features_dim, num_classes)
 
@@ -384,7 +387,14 @@ class BaseModel(pl.LightningModule):
             torch.Tensor: features extracted by the encoder.
         """
 
-        return {"feats": self.encoder(X)}
+        feats = self.encoder(X)
+        
+        # Handle ViT output (sequence of patches) vs CNN output (single vector)
+        if len(feats.shape) == 3:  # ViT output: [batch_size, num_patches+1, embed_dim]
+            # Use CLS token (first token) for classification tasks
+            feats = feats[:, 0, :]  # [batch_size, embed_dim]
+        
+        return {"feats": feats}
 
     def _online_eval_shared_step(self, X: torch.Tensor, targets) -> Dict:
         """Forwards a batch of images X and computes the classification loss, the logits, the
@@ -702,16 +712,20 @@ class BaseMomentumModel(BaseModel):
             # Create a copy of the encoder for momentum
             encoder_type = kwargs.get('encoder', 'resnet18')
             if encoder_type == "vit_small":
-                from cassle.backbones import vit_small
+                import timm
                 
                 # For CIFAR datasets, use smaller image size
                 img_size = 32 if self.cifar else 224
                 patch_size = 4 if self.cifar else 16
                 
-                self.momentum_encoder = vit_small(
+                # Use timm's ViT-Small model for momentum encoder
+                self.momentum_encoder = timm.create_model(
+                    'vit_small_patch16_224',
+                    pretrained=False,
+                    num_classes=0,
                     img_size=img_size,
                     patch_size=patch_size,
-                    num_classes=0  # Remove classification head
+                    global_pool=''
                 )
         
         initialize_momentum_params(self.encoder, self.momentum_encoder)
@@ -795,6 +809,12 @@ class BaseMomentumModel(BaseModel):
         """
 
         feats = self.momentum_encoder(X)
+        
+        # Handle ViT output (sequence of patches) vs CNN output (single vector)
+        if len(feats.shape) == 3:  # ViT output: [batch_size, num_patches+1, embed_dim]
+            # Use CLS token (first token) for classification tasks
+            feats = feats[:, 0, :]  # [batch_size, embed_dim]
+        
         return {"feats": feats}
 
     def _online_eval_shared_step_momentum(
