@@ -19,12 +19,14 @@ data/
 *.pth
 *.ckpt
 *.tar
-
+CLAUDE.md
 *.png
 !assets/*.png
 *.jpg
 *.jpeg
-
+test_experiment/
+.claude/
+.whl
 saved_models/
 model_storage/
 model_storage*/

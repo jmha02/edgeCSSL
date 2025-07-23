@@ -1,8 +1,9 @@
 from argparse import ArgumentParser
 from functools import partial
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import functools
 import operator
+import os
 
 import numpy as np
 import pytorch_lightning as pl
@@ -13,6 +14,7 @@ from cassle.utils.knn import WeightedKNNClassifier
 from cassle.utils.lars import LARSWrapper
 from cassle.utils.metrics import accuracy_at_k, weighted_mean
 from cassle.utils.momentum import MomentumUpdater, initialize_momentum_params
+from cassle.utils.timer import TrainingTimer, TimingLogger
 from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
 
@@ -99,6 +101,12 @@ class BaseModel(pl.LightningModule):
 
         # validation outputs storage for PyTorch Lightning 2.0
         self.validation_step_outputs = []
+        
+        # initialize timer for tracking training metrics
+        self.timer = TrainingTimer(sync_cuda=True)
+        
+        # initialize timing logger (will be set up in on_train_start)
+        self.timing_logger: Optional[TimingLogger] = None
 
         # back-bone related
         self.cifar = cifar
@@ -193,6 +201,9 @@ class BaseModel(pl.LightningModule):
 
         if not self.disable_knn_eval:
             self.knn = WeightedKNNClassifier(k=knn_k, distance_fx="euclidean")
+            
+        # Track current epoch for timing
+        self.current_epoch_num = 0
 
     @staticmethod
     def add_model_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
@@ -417,45 +428,49 @@ class BaseModel(pl.LightningModule):
             Dict[str, Any]: dict with the classification loss, features and logits
         """
 
-        _, X_task, _ = batch[f"task{self.current_task_idx}"]
-        X_task = [X_task] if isinstance(X_task, torch.Tensor) else X_task
+        # Start timing this training step
+        with self.timer.time('training_step'):
+            _, X_task, _ = batch[f"task{self.current_task_idx}"]
+            X_task = [X_task] if isinstance(X_task, torch.Tensor) else X_task
 
-        # check that we received the desired number of crops
-        assert len(X_task) == self.num_crops + self.num_small_crops
+            # check that we received the desired number of crops
+            assert len(X_task) == self.num_crops + self.num_small_crops
 
-        # forward views of the current task in the encoder
-        outs_task = [self.base_forward(x) for x in X_task[: self.num_crops]]
-        outs_task = {k: [out[k] for out in outs_task] for k in outs_task[0].keys()}
+            # forward views of the current task in the encoder
+            with self.timer.time('forward_pass'):
+                outs_task = [self.base_forward(x) for x in X_task[: self.num_crops]]
+                outs_task = {k: [out[k] for out in outs_task] for k in outs_task[0].keys()}
 
-        if self.multicrop:
-            outs_task["feats"].extend([self.encoder(x) for x in X_task[self.num_crops :]])
+                if self.multicrop:
+                    outs_task["feats"].extend([self.encoder(x) for x in X_task[self.num_crops :]])
 
-        if self.online_eval:
-            assert "online_eval" in batch.keys()
-            *_, X_online_eval, targets_online_eval = batch["online_eval"]
+            if self.online_eval:
+                assert "online_eval" in batch.keys()
+                *_, X_online_eval, targets_online_eval = batch["online_eval"]
 
-            # forward online eval images and calculate online eval loss
-            outs_online_eval = self._online_eval_shared_step(X_online_eval, targets_online_eval)
-            outs_online_eval = {"online_eval_" + k: v for k, v in outs_online_eval.items()}
+                # forward online eval images and calculate online eval loss
+                with self.timer.time('online_eval'):
+                    outs_online_eval = self._online_eval_shared_step(X_online_eval, targets_online_eval)
+                    outs_online_eval = {"online_eval_" + k: v for k, v in outs_online_eval.items()}
 
-            metrics = {
-                "train_online_eval_loss": outs_online_eval["online_eval_loss"],
-                "train_online_eval_acc1": outs_online_eval["online_eval_acc1"],
-                "train_online_eval_acc5": outs_online_eval["online_eval_acc5"],
-            }
+                metrics = {
+                    "train_online_eval_loss": outs_online_eval["online_eval_loss"],
+                    "train_online_eval_acc1": outs_online_eval["online_eval_acc1"],
+                    "train_online_eval_acc5": outs_online_eval["online_eval_acc5"],
+                }
 
-            self.log_dict(metrics, on_epoch=True, sync_dist=True)
+                self.log_dict(metrics, on_epoch=True, sync_dist=True)
 
-            if not self.disable_knn_eval:
-                self.knn(
-                    train_features=outs_online_eval["online_eval_feats"].detach(),
-                    train_targets=targets_online_eval,
-                )
+                if not self.disable_knn_eval:
+                    self.knn(
+                        train_features=outs_online_eval["online_eval_feats"].detach(),
+                        train_targets=targets_online_eval,
+                    )
 
-            loss = outs_online_eval.pop("online_eval_loss")
-            return {**outs_task, **outs_online_eval, **{"loss": loss}}
-        else:
-            return {**outs_task, "loss": 0}
+                loss = outs_online_eval.pop("online_eval_loss")
+                return {**outs_task, **outs_online_eval, **{"loss": loss}}
+            else:
+                return {**outs_task, "loss": 0}
 
     def validation_step(self, batch: List[torch.Tensor], batch_idx: int) -> Dict[str, Any]:
         """Validation step for pytorch lightning. It does all the shared operations, such as
@@ -536,6 +551,117 @@ class BaseModel(pl.LightningModule):
 
             self.log_dict(log, sync_dist=True)
             self.validation_step_outputs.clear()  # free memory
+    
+    def on_train_start(self) -> None:
+        """Called when training begins."""
+        super().on_train_start() if hasattr(super(), 'on_train_start') else None
+        self.timer.start_training()
+        
+        # Setup timing logger
+        if hasattr(self.trainer, 'default_root_dir') and self.trainer.default_root_dir:
+            log_dir = os.path.join(self.trainer.default_root_dir, 'timing_logs')
+            experiment_name = getattr(self.trainer.logger, 'name', 'experiment') if hasattr(self.trainer, 'logger') else 'experiment'
+            
+            # Include task info if available
+            if hasattr(self, 'current_task_idx') and self.current_task_idx is not None:
+                experiment_name = f"{experiment_name}_task{self.current_task_idx}"
+            
+            self.timing_logger = TimingLogger(log_dir, experiment_name)
+        
+        print(f"Training started - timing enabled with logging to: {log_dir if hasattr(self.trainer, 'default_root_dir') else 'console only'}")
+    
+    def on_train_epoch_start(self) -> None:
+        """Called when a training epoch starts."""
+        super().on_train_epoch_start() if hasattr(super(), 'on_train_epoch_start') else None
+        self.timer.start_epoch(self.current_epoch)
+        self.current_epoch_num = self.current_epoch
+    
+    def on_train_epoch_end(self) -> None:
+        """Called when a training epoch ends."""
+        super().on_train_epoch_end() if hasattr(super(), 'on_train_epoch_end') else None
+        
+        epoch_time = self.timer.end_epoch(self.current_epoch)
+        
+        # Log timing metrics
+        timing_metrics = self.timer.log_metrics_to_dict()
+        timing_metrics['timing/current_epoch_time'] = epoch_time
+        timing_metrics['timing/current_epoch_time_formatted'] = self.timer.format_time(epoch_time)
+        
+        self.log_dict(timing_metrics, on_epoch=True, sync_dist=True)
+        
+        # Log to file if timing logger is available
+        if self.timing_logger:
+            task_id = getattr(self, 'current_task_idx', 0) or 0
+            self.timing_logger.log_epoch(self.current_epoch, task_id, self.timer)
+        
+        # Print timing summary every 10 epochs or on last epoch
+        if (self.current_epoch + 1) % 10 == 0 or self.current_epoch == self.max_epochs - 1:
+            print(f"\nEpoch {self.current_epoch + 1} completed in {self.timer.format_time(epoch_time)}")
+            metrics = self.timer.get_training_metrics()
+            if 'avg_step_time_seconds' in metrics:
+                print(f"Average step time: {metrics['avg_step_time_formatted']}")
+                print(f"Steps per second: {metrics.get('steps_per_second', 0):.2f}")
+    
+    def on_train_end(self) -> None:
+        """Called when training ends."""
+        super().on_train_end() if hasattr(super(), 'on_train_end') else None
+        
+        total_time = self.timer.end_training()
+        
+        # Log to file if timing logger is available
+        if self.timing_logger:
+            # Get additional info for logging
+            additional_info = {
+                'method': getattr(self, '__class__', {}).get('__name__', 'unknown'),
+                'encoder': getattr(self, 'encoder', 'unknown'),
+                'batch_size': getattr(self, 'batch_size', 'unknown'),
+                'max_epochs': getattr(self, 'max_epochs', 'unknown'),
+                'task_idx': getattr(self, 'current_task_idx', 0)
+            }
+            
+            self.timing_logger.log_overall_summary(self.timer, additional_info)
+            
+            # Generate analysis report
+            report_file = self.timing_logger.generate_analysis_report()
+            
+            # Log task completion if we have task info
+            task_id = getattr(self, 'current_task_idx', 0) or 0
+            self.timing_logger.log_task_completion(task_id, total_time, self.timer)
+        
+        # Print final timing summary
+        print("\n" + "="*80)
+        print("TRAINING COMPLETED - TIMING SUMMARY")
+        print("="*80)
+        print(f"Total training time: {self.timer.format_time(total_time)}")
+        
+        metrics = self.timer.get_training_metrics()
+        if metrics:
+            if 'total_epochs' in metrics:
+                print(f"Total epochs: {metrics['total_epochs']}")
+            if 'avg_epoch_time_formatted' in metrics:
+                print(f"Average epoch time: {metrics['avg_epoch_time_formatted']}")
+            if 'total_steps' in metrics:
+                print(f"Total training steps: {metrics['total_steps']}")
+            if 'avg_step_time_formatted' in metrics:
+                print(f"Average step time: {metrics['avg_step_time_formatted']}")
+            if 'steps_per_second' in metrics:
+                print(f"Average steps per second: {metrics['steps_per_second']:.2f}")
+        
+        # Print detailed timing breakdown
+        self.timer.print_summary()
+        
+        # Log final timing metrics
+        final_timing_metrics = self.timer.log_metrics_to_dict()
+        self.log_dict(final_timing_metrics, sync_dist=True)
+        
+        if self.timing_logger:
+            print(f"\nDetailed timing logs saved to:")
+            print(f"  - Epoch timing: {self.timing_logger.epoch_log_file}")
+            print(f"  - Step timing: {self.timing_logger.step_log_file}")
+            print(f"  - Task timing: {self.timing_logger.task_log_file}")
+            print(f"  - Summary: {self.timing_logger.summary_log_file}")
+            print(f"  - Analysis report: {report_file}")
+            print("="*80)
 
 
 class BaseMomentumModel(BaseModel):
