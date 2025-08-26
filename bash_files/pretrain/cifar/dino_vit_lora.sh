@@ -23,7 +23,7 @@ python3 main_pretrain.py \
     --min_scale 0.08 \
     --size 32 \
     --num_crops 2 \
-    --name dino-vit-small-cifar100 \
+    --name dino-vit-small-cifar100-lora \
     --project cassle \
     --entity cassle_ssl \
     --save_checkpoint \
@@ -42,4 +42,8 @@ python3 main_pretrain.py \
     --scheduler cosine \
     --task_idx 0 \
     --split_strategy data \
-    --num_tasks 1 | tee logs/dino_vit_small_cifar100.log
+    --num_tasks 1 \
+    --use_lora \
+    --lora_r 16 \
+    --lora_alpha 32 \
+    --lora_dropout 0.1 | tee logs/dino_vit_small_cifar100_lora.log

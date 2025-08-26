@@ -37,4 +37,4 @@ python3 main_pretrain.py \
     --output_dim 256 \
     --task_idx 0 \
     --split_strategy data \
-    --num_tasks 1
+    --num_tasks 1 | tee logs/simclr_resnet18_cifar100.log

@@ -61,6 +61,10 @@ class BaseModel(pl.LightningModule):
         lr_decay_steps: Sequence = None,
         disable_knn_eval: bool = True,
         knn_k: int = 20,
+        use_lora: bool = False,
+        lora_r: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.1,
         **kwargs,
     ):
         """Base model that implements all basic operations for all self-supervised methods.
@@ -95,6 +99,12 @@ class BaseModel(pl.LightningModule):
             grad_clip_lars (bool): whether to clip the gradients in lars.
             lr_decay_steps (Sequence, optional): steps to decay the learning rate if scheduler is
                 step. Defaults to None.
+            disable_knn_eval (bool): whether to disable knn evaluation.
+            knn_k (int): number of neighbors for knn evaluation.
+            use_lora (bool): whether to use LoRA for efficient training.
+            lora_r (int): LoRA rank parameter.
+            lora_alpha (int): LoRA scaling parameter.
+            lora_dropout (float): LoRA dropout rate.
         """
 
         super().__init__()
@@ -139,6 +149,10 @@ class BaseModel(pl.LightningModule):
         self.tasks = tasks
         self.num_tasks = num_tasks
         self.split_strategy = split_strategy
+        self.use_lora = use_lora
+        self.lora_r = lora_r
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
 
         self.domains = [
             "real",
@@ -183,20 +197,38 @@ class BaseModel(pl.LightningModule):
                 self.encoder.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=2, bias=False)
                 self.encoder.maxpool = nn.Identity()
         elif encoder == "vit_small":
-            import timm
-            
             # For CIFAR datasets, use smaller image size
             img_size = 32 if cifar else 224
             patch_size = 4 if cifar else 16
             
-            self.encoder = timm.create_model(
-                'vit_small_patch16_224',
-                pretrained=False,
-                num_classes=0,  # Remove classification head
-                img_size=img_size,
-                patch_size=patch_size,
-                global_pool=''
-            )
+            if use_lora:
+                from cassle.utils.lora_utils import create_lora_vit_encoder, print_lora_info
+                
+                self.encoder = create_lora_vit_encoder(
+                    model_name='vit_small_patch16_224',
+                    pretrained=False,
+                    num_classes=0,
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    global_pool='',
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout
+                )
+                
+                # Print LoRA configuration info
+                print_lora_info(self.encoder, f"ViT-S Encoder ({encoder})")
+            else:
+                import timm
+                
+                self.encoder = timm.create_model(
+                    'vit_small_patch16_224',
+                    pretrained=False,
+                    num_classes=0,  # Remove classification head
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    global_pool=''
+                )
             
             self.features_dim = self.encoder.embed_dim
 
@@ -275,6 +307,12 @@ class BaseModel(pl.LightningModule):
         # knn eval
         parser.add_argument("--disable_knn_eval", action="store_true")
         parser.add_argument("--knn_k", default=20, type=int)
+
+        # LoRA parameters
+        parser.add_argument("--use_lora", action="store_true", help="Enable LoRA for efficient training")
+        parser.add_argument("--lora_r", default=16, type=int, help="LoRA rank parameter")
+        parser.add_argument("--lora_alpha", default=32, type=int, help="LoRA scaling parameter")
+        parser.add_argument("--lora_dropout", default=0.1, type=float, help="LoRA dropout rate")
 
         return parent_parser
 
@@ -712,21 +750,40 @@ class BaseMomentumModel(BaseModel):
             # Create a copy of the encoder for momentum
             encoder_type = kwargs.get('encoder', 'resnet18')
             if encoder_type == "vit_small":
-                import timm
-                
                 # For CIFAR datasets, use smaller image size
                 img_size = 32 if self.cifar else 224
                 patch_size = 4 if self.cifar else 16
                 
-                # Use timm's ViT-Small model for momentum encoder
-                self.momentum_encoder = timm.create_model(
-                    'vit_small_patch16_224',
-                    pretrained=False,
-                    num_classes=0,
-                    img_size=img_size,
-                    patch_size=patch_size,
-                    global_pool=''
-                )
+                if self.use_lora:
+                    from cassle.utils.lora_utils import create_lora_vit_encoder, print_lora_info
+                    
+                    # Use LoRA for momentum encoder as well
+                    self.momentum_encoder = create_lora_vit_encoder(
+                        model_name='vit_small_patch16_224',
+                        pretrained=False,
+                        num_classes=0,
+                        img_size=img_size,
+                        patch_size=patch_size,
+                        global_pool='',
+                        lora_r=self.lora_r,
+                        lora_alpha=self.lora_alpha,
+                        lora_dropout=self.lora_dropout
+                    )
+                    
+                    # Print LoRA configuration info for momentum encoder
+                    print_lora_info(self.momentum_encoder, f"ViT-S Momentum Encoder ({encoder_type})")
+                else:
+                    import timm
+                    
+                    # Use timm's ViT-Small model for momentum encoder
+                    self.momentum_encoder = timm.create_model(
+                        'vit_small_patch16_224',
+                        pretrained=False,
+                        num_classes=0,
+                        img_size=img_size,
+                        patch_size=patch_size,
+                        global_pool=''
+                    )
         
         initialize_momentum_params(self.encoder, self.momentum_encoder)
 
