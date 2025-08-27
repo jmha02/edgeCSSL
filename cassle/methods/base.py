@@ -633,7 +633,6 @@ class BaseModel(pl.LightningModule):
         # Log timing metrics
         timing_metrics = self.timer.log_metrics_to_dict()
         timing_metrics['timing/current_epoch_time'] = epoch_time
-        timing_metrics['timing/current_epoch_time_formatted'] = self.timer.format_time(epoch_time)
         
         self.log_dict(timing_metrics, on_epoch=True, sync_dist=True)
         

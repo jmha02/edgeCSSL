@@ -118,6 +118,7 @@ class DeepClusterV2(BaseModel):
 
     def on_train_epoch_start(self) -> None:
         """Prepares assignments and prototype centroids for the next epoch."""
+        super().on_train_epoch_start()
 
         if self.current_epoch == 0:
             self.assignments = -torch.ones(

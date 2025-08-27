@@ -228,6 +228,7 @@ class DINO(BaseMomentumModel):
 
     def on_train_epoch_start(self):
         """Updates the current epoch in DINO's loss object."""
+        super().on_train_epoch_start()
         self.dino_loss_func.epoch = self.current_epoch
 
     def forward(self, X: torch.Tensor, *args, **kwargs) -> Dict[str, Any]:
