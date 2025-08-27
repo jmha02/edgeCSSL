@@ -15,6 +15,7 @@ from cassle.utils.lars import LARSWrapper
 from cassle.utils.metrics import accuracy_at_k, weighted_mean
 from cassle.utils.momentum import MomentumUpdater, initialize_momentum_params
 from cassle.utils.timer import TrainingTimer, TimingLogger
+from cassle.utils.memory_utils import MemoryMonitor, get_model_memory_footprint
 from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
 
@@ -117,6 +118,10 @@ class BaseModel(pl.LightningModule):
         
         # initialize timing logger (will be set up in on_train_start)
         self.timing_logger: Optional[TimingLogger] = None
+        
+        # initialize memory monitor for tracking memory usage
+        self.memory_monitor = MemoryMonitor()
+        self.baseline_memory_stats = None
 
         # back-bone related
         self.cifar = cifar
@@ -491,6 +496,9 @@ class BaseModel(pl.LightningModule):
 
                 if self.multicrop:
                     outs_task["feats"].extend([self.encoder(x) for x in X_task[self.num_crops :]])
+                    
+                # Update peak memory after forward pass
+                self.memory_monitor.update_peak_memory()
 
             if self.online_eval:
                 assert "online_eval" in batch.keys()
@@ -616,7 +624,28 @@ class BaseModel(pl.LightningModule):
             
             self.timing_logger = TimingLogger(log_dir, experiment_name)
         
-        print(f"Training started - timing enabled with logging to: {log_dir if hasattr(self.trainer, 'default_root_dir') else 'console only'}")
+        # Setup memory monitoring
+        self.memory_monitor.reset_stats()
+        model_memory = get_model_memory_footprint(self)
+        
+        print(f"\n{'='*80}")
+        print("TRAINING STARTED - MEMORY & TIMING MONITORING ENABLED")
+        print(f"{'='*80}")
+        print(f"Model Configuration:")
+        print(f"  Encoder: {getattr(self, 'encoder', 'unknown')}")
+        print(f"  LoRA Enabled: {getattr(self, 'use_lora', False)}")
+        print(f"  Batch Size: {getattr(self, 'batch_size', 'unknown')}")
+        print(f"\nModel Memory Footprint:")
+        print(f"  Parameters: {model_memory['parameters_mb']:.1f} MB")
+        print(f"  Buffers: {model_memory['buffers_mb']:.1f} MB")
+        print(f"  Total Model: {model_memory['total_model_mb']:.1f} MB")
+        
+        # Log initial memory state and set as baseline
+        print(f"\nInitial Memory State:")
+        self.baseline_memory_stats = self.memory_monitor.log_memory_usage("initialization")
+        
+        print(f"\nTiming logs: {log_dir if hasattr(self.trainer, 'default_root_dir') else 'console only'}")
+        print(f"{'='*80}\n")
     
     def on_train_epoch_start(self) -> None:
         """Called when a training epoch starts."""
@@ -634,7 +663,13 @@ class BaseModel(pl.LightningModule):
         timing_metrics = self.timer.log_metrics_to_dict()
         timing_metrics['timing/current_epoch_time'] = epoch_time
         
-        self.log_dict(timing_metrics, on_epoch=True, sync_dist=True)
+        # Log memory metrics
+        memory_stats = self.memory_monitor.get_memory_summary()
+        memory_metrics = {f'memory/{k}': v for k, v in memory_stats.items()}
+        
+        # Combine timing and memory metrics
+        all_metrics = {**timing_metrics, **memory_metrics}
+        self.log_dict(all_metrics, on_epoch=True, sync_dist=True)
         
         # Log to file if timing logger is available
         if self.timing_logger:
@@ -648,6 +683,10 @@ class BaseModel(pl.LightningModule):
             if 'avg_step_time_seconds' in metrics:
                 print(f"Average step time: {metrics['avg_step_time_formatted']}")
                 print(f"Steps per second: {metrics.get('steps_per_second', 0):.2f}")
+            
+            # Print memory summary
+            print(f"Peak GPU Memory: {memory_stats['peak_gpu_allocated_mb']:.1f} MB")
+            print(f"Current GPU Memory: {memory_stats['current_gpu_allocated_mb']:.1f} MB")
     
     def on_train_end(self) -> None:
         """Called when training ends."""
@@ -675,9 +714,9 @@ class BaseModel(pl.LightningModule):
             task_id = getattr(self, 'current_task_idx', 0) or 0
             self.timing_logger.log_task_completion(task_id, total_time, self.timer)
         
-        # Print final timing summary
+        # Print comprehensive final summary
         print("\n" + "="*80)
-        print("TRAINING COMPLETED - TIMING SUMMARY")
+        print("TRAINING COMPLETED - COMPREHENSIVE SUMMARY")
         print("="*80)
         print(f"Total training time: {self.timer.format_time(total_time)}")
         
@@ -694,12 +733,28 @@ class BaseModel(pl.LightningModule):
             if 'steps_per_second' in metrics:
                 print(f"Average steps per second: {metrics['steps_per_second']:.2f}")
         
+        # Print final memory report
+        final_memory_report = self.memory_monitor.format_memory_report("FINAL MEMORY USAGE REPORT")
+        print(final_memory_report)
+        
+        # Compare with baseline if available
+        if self.baseline_memory_stats:
+            final_stats = self.memory_monitor.get_memory_summary()
+            comparison = self.memory_monitor.compare_memory_usage(self.baseline_memory_stats, final_stats)
+            
+            print("Memory Usage Comparison (vs. Baseline):")
+            print(f"  Peak GPU Memory Increase: {comparison.get('peak_gpu_allocated_mb_diff', 0):.1f} MB")
+            print(f"  Peak CPU Memory Increase: {comparison.get('peak_cpu_rss_mb_diff', 0):.1f} MB")
+            print(f"  GPU Memory Ratio: {comparison.get('peak_gpu_allocated_mb_ratio', 1):.2f}x")
+        
         # Print detailed timing breakdown
         self.timer.print_summary()
         
-        # Log final timing metrics
+        # Log final timing and memory metrics
         final_timing_metrics = self.timer.log_metrics_to_dict()
-        self.log_dict(final_timing_metrics, sync_dist=True)
+        final_memory_metrics = {f'memory/{k}': v for k, v in self.memory_monitor.get_memory_summary().items()}
+        final_metrics = {**final_timing_metrics, **final_memory_metrics}
+        self.log_dict(final_metrics, sync_dist=True)
         
         if self.timing_logger:
             print(f"\nDetailed timing logs saved to:")
